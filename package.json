@@ -1,0 +1,10 @@
+{
+  "name": "nutrition-counter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "verify": "node --check app.js && node scripts/verify-static.js"
+  }
+}

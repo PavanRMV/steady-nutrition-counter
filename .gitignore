@@ -1,0 +1,6 @@
+node_modules/
+.qa-browser/
+outputs/
+scripts/browser-qa.mjs
+.DS_Store
+Thumbs.db
