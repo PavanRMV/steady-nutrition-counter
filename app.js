@@ -1,6 +1,9 @@
-import { searchCatalog, calculateFood, normalizeOpenFoodFactsProduct } from './catalog.js';
+import { FOOD_CATALOG, searchCatalog, calculateFood, normalizeOpenFoodFactsProduct, rankSuggestions } from './catalog.js';
 export const STORAGE_KEY = 'steady-gain-nutrition-v1';
-export const DATA_VERSION = 1;
+export const REMINDER_STORAGE_KEY = 'steady-gain-reminder-v1';
+export const REMINDER_INTERVAL_MS = 3 * 60 * 60 * 1000;
+export const REMINDER_MESSAGE = 'eat eat eat!!!';
+export const DATA_VERSION = 2;
 export const DEFAULT_TARGETS = Object.freeze({ calories: 2650, protein: 110, fibre: 35 });
 
 const isoDate = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -15,6 +18,34 @@ const freshDay = () => ({ weight: null, entries: [] });
 const clone = value => JSON.parse(JSON.stringify(value));
 const rounded = value => Math.round(value * 10) / 10;
 
+export function enableReminder(now = Date.now()) {
+  return { enabled: true, nextAt: Number(now) + REMINDER_INTERVAL_MS };
+}
+
+export function checkReminder(setting, now = Date.now()) {
+  if (!setting?.enabled || !Number.isFinite(setting.nextAt) || Number(now) < setting.nextAt) return { due: false, setting };
+  const elapsedIntervals = Math.floor((Number(now) - setting.nextAt) / REMINDER_INTERVAL_MS) + 1;
+  return { due: true, setting: { enabled: true, nextAt: setting.nextAt + elapsedIntervals * REMINDER_INTERVAL_MS } };
+}
+
+export function loadReminderSetting(storage) {
+  try {
+    const value = JSON.parse(storage.getItem(REMINDER_STORAGE_KEY));
+    return value?.enabled === true && Number.isFinite(value.nextAt) ? { enabled: true, nextAt: value.nextAt } : { enabled: false, nextAt: null };
+  } catch { return { enabled: false, nextAt: null }; }
+}
+
+export function persistReminderSetting(storage, setting) {
+  try { storage.setItem(REMINDER_STORAGE_KEY, JSON.stringify(setting)); return { ok: true }; }
+  catch { return { ok: false, error: 'Unable to save reminder setting in this browser.' }; }
+}
+
+export async function notifyReminder(permission, showNotification) {
+  if (permission !== 'granted' || typeof showNotification !== 'function') return false;
+  try { await showNotification(REMINDER_MESSAGE); return true; }
+  catch { return false; }
+}
+
 export function emptyState() {
   return { version: DATA_VERSION, targets: { ...DEFAULT_TARGETS }, days: {} };
 }
@@ -23,7 +54,7 @@ export function validateEntry(input) {
   const errors = {};
   const name = String(input?.name ?? '').trim();
   if (!name) errors.name = 'Food or meal name is required.';
-  for (const field of ['calories', 'protein', 'fibre']) {
+  for (const field of ['calories', 'protein', 'fibre', 'carbs']) {
     const raw = input?.[field];
     if (raw === '' || raw === null || raw === undefined || !Number.isFinite(Number(raw))) {
       errors[field] = 'Enter a valid number.';
@@ -42,8 +73,10 @@ function normalizeEntry(input) {
     name: String(input.name).trim(),
     calories: Number(input.calories),
     protein: Number(input.protein),
-    fibre: Number(input.fibre)
+    fibre: Number(input.fibre),
+    carbs: Number(input.carbs ?? 0)
   };
+  if (input.carbsEstimated) item.carbsEstimated = true;
   for (const key of ['foodId', 'source', 'unit']) if (input[key]) item[key] = String(input[key]);
   if (input.quantity !== undefined) {
     const quantity = Number(input.quantity);
@@ -57,9 +90,26 @@ export function calculateTotals(entries = []) {
   const totals = entries.reduce((sum, item) => ({
     calories: sum.calories + Number(item.calories),
     protein: sum.protein + Number(item.protein),
-    fibre: sum.fibre + Number(item.fibre)
-  }), { calories: 0, protein: 0, fibre: 0 });
-  return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, rounded(value)]));
+    fibre: sum.fibre + Number(item.fibre),
+    carbs: sum.carbs + (typeof item.carbs === 'number' && Number.isFinite(item.carbs) ? item.carbs : 0),
+    unknownCarbEntries: sum.unknownCarbEntries + (item.carbsUnknown === true || typeof item.carbs !== 'number' || !Number.isFinite(item.carbs) ? 1 : 0)
+  }), { calories: 0, protein: 0, fibre: 0, carbs: 0, unknownCarbEntries: 0 });
+  return {
+    calories: rounded(totals.calories), protein: rounded(totals.protein), fibre: rounded(totals.fibre), carbs: rounded(totals.carbs),
+    unknownCarbEntries: totals.unknownCarbEntries, hasUnknownCarbs: totals.unknownCarbEntries > 0
+  };
+}
+
+export function carbTotalLabel(totals) {
+  if (!totals.hasUnknownCarbs) return `${totals.carbs} g consumed`;
+  const count = totals.unknownCarbEntries;
+  return `At least ${totals.carbs} g known carbs · ${count} legacy ${count === 1 ? 'entry has' : 'entries have'} unknown carbs`;
+}
+
+export function carbEntryLabel(item) {
+  return item.carbsUnknown === true || typeof item.carbs !== 'number' || !Number.isFinite(item.carbs)
+    ? 'Carbs unavailable for legacy entry'
+    : `${item.carbs}g carbs`;
 }
 
 export function nutrientStatus(total, target) {
@@ -129,7 +179,10 @@ function validateState(value) {
     if (!day || !Array.isArray(day.entries)) throw new Error('Backup day is invalid.');
     if (day.weight !== null && (!Number.isFinite(Number(day.weight)) || Number(day.weight) <= 0)) throw new Error('Backup weight is invalid.');
     for (const item of day.entries) {
-      if (!item?.id || !validateEntry(item).valid) throw new Error('Backup contains an invalid entry.');
+      const unknownCarbs = item?.carbsUnknown === true && item.carbs === null;
+      const validKnownCarbs = typeof item?.carbs === 'number' && Number.isFinite(item.carbs) && item.carbs >= 0 && item.carbsUnknown !== true;
+      const entryForValidation = unknownCarbs ? { ...item, carbs: 0 } : item;
+      if (!item?.id || !validateEntry(entryForValidation).valid || (!unknownCarbs && !validKnownCarbs)) throw new Error('Backup contains an invalid entry.');
     }
   }
   return true;
@@ -150,9 +203,19 @@ export function parseBackup(text) {
 
 export function migrateState(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Backup data is invalid.');
-  if (value.version === DATA_VERSION) return clone(value);
-  if (value.version === undefined && value.days && value.targets) return { ...clone(value), version: DATA_VERSION };
-  throw new Error(value.version === undefined ? 'Backup data is invalid.' : 'Backup version is not supported.');
+  if (![undefined, 1, DATA_VERSION].includes(value.version)) throw new Error('Backup version is not supported.');
+  if (!value.days || !value.targets) throw new Error('Backup data is invalid.');
+  const next = clone(value);
+  const isLegacy = value.version === undefined || value.version === 1;
+  next.version = DATA_VERSION;
+  for (const day of Object.values(next.days)) for (const item of (day?.entries || [])) {
+    if (isLegacy && item.carbs == null) {
+      item.carbs = null;
+      item.carbsUnknown = true;
+      delete item.carbsEstimated;
+    }
+  }
+  return next;
 }
 
 export function loadStoredState(storage) {
@@ -184,9 +247,46 @@ function initBrowser() {
   let recovery = loaded.recovery;
   let storageBlocked = loaded.writeBlocked;
   let editingId = null;
+  let editingMetadata = null;
   let selectedFood = null;
+  let suggestionFilter = 'balanced';
   let onlineTimer;
   let onlineController;
+  let reminderSetting = loadReminderSetting(localStorage);
+  let reminderTimer;
+
+  function renderReminderStatus(extra = '') {
+    const toggle = $('#reminder-toggle');
+    toggle.setAttribute('aria-pressed', String(reminderSetting.enabled));
+    toggle.textContent = reminderSetting.enabled ? 'Disable reminders' : 'Enable reminders';
+    const permission = typeof Notification === 'undefined' ? 'System notifications are unavailable.' : Notification.permission === 'granted' ? 'System notifications allowed.' : Notification.permission === 'denied' ? 'System notifications blocked; in-app alerts will be used.' : 'System notification permission has not been granted.';
+    const schedule = reminderSetting.enabled ? ` Next reminder: ${new Date(reminderSetting.nextAt).toLocaleString()}.` : '';
+    $('#reminder-status').textContent = extra || `${reminderSetting.enabled ? 'Reminders are on.' : 'Reminders are off.'}${schedule} ${permission}`;
+  }
+
+  function scheduleReminderCheck() {
+    clearTimeout(reminderTimer);
+    if (!reminderSetting.enabled) return;
+    reminderTimer = setTimeout(checkAndShowReminder, Math.max(0, Math.min(REMINDER_INTERVAL_MS, reminderSetting.nextAt - Date.now())));
+  }
+
+  function checkAndShowReminder() {
+    const result = checkReminder(reminderSetting);
+    if (result.due) {
+      reminderSetting = result.setting;
+      persistReminderSetting(localStorage, reminderSetting);
+      const alert = $('#reminder-alert');
+      alert.textContent = REMINDER_MESSAGE;
+      alert.hidden = false;
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(registration => notifyReminder(Notification.permission, message => registration.showNotification(message)));
+        else notifyReminder(Notification.permission, message => new Notification(message));
+      }
+      announcer.textContent = REMINDER_MESSAGE;
+    }
+    renderReminderStatus();
+    scheduleReminderCheck();
+  }
 
   function localToday() {
     const now = new Date();
@@ -229,14 +329,29 @@ function initBrowser() {
       bar.parentElement.setAttribute('aria-valuetext', `${formatNumber(totals[key])} of ${formatNumber(state.targets[key])} ${unit}; ${formatNumber(status.amount)} ${status.label}`);
       bar.classList.toggle('over', status.label === 'over');
     }
+    $('#carbs-total').textContent = carbTotalLabel(totals);
     $('#entries').innerHTML = current.entries.length ? current.entries.map(item => `
       <li class="entry-card">
-        <div><strong>${esc(item.name)}</strong><span>${item.quantity ? `${formatNumber(item.quantity)} ${esc(item.unit || 'serving')} · ` : ''}${formatNumber(item.calories)} kcal · ${formatNumber(item.protein)}g protein · ${formatNumber(item.fibre)}g fibre</span></div>
+        <div><strong>${esc(item.name)}</strong><span>${item.quantity ? `${formatNumber(item.quantity)} ${esc(item.unit || 'serving')} · ` : ''}${formatNumber(item.calories)} kcal · ${formatNumber(item.protein)}g protein · ${formatNumber(item.fibre)}g fibre · ${carbEntryLabel(item)}</span></div>
         <div class="entry-actions"><button type="button" class="text-button" data-edit="${esc(item.id)}" aria-label="Edit ${esc(item.name)}">Edit</button><button type="button" class="text-button danger" data-delete="${esc(item.id)}" aria-label="Delete ${esc(item.name)}">Delete</button></div>
       </li>`).join('') : '<li class="empty">No food logged yet. Add your first meal below.</li>';
     $('#clear-day').disabled = !current.entries.length && current.weight === null;
     renderTargets();
     renderHistory();
+    renderSuggestions(totals);
+  }
+
+  function renderSuggestions(totals) {
+    const remaining = {
+      calories: Math.max(0, state.targets.calories - totals.calories),
+      protein: Math.max(0, state.targets.protein - totals.protein),
+      fibre: Math.max(0, state.targets.fibre - totals.fibre)
+    };
+    const foods = rankSuggestions(FOOD_CATALOG, remaining, suggestionFilter, 8);
+    const body = $('#suggestions-body');
+    body.innerHTML = foods.length ? foods.map(food => `<tr><td data-label="Food"><strong>${esc(food.name)}</strong><small>${esc(food.preparation)}</small></td><td data-label="Portion">${esc(food.unit)} (${food.gramsPerUnit} g)</td><td data-label="Calories">${formatNumber(food.calories)}</td><td data-label="Protein">${formatNumber(food.protein)} g</td><td data-label="Fibre">${formatNumber(food.fibre)} g</td><td data-label="Carbs">${formatNumber(food.carbs)} g</td><td data-label="Why">${esc(food.why)}</td><td data-label="Action"><button class="button secondary suggestion-select" type="button" data-suggest="${esc(food.id)}">Select</button></td></tr>`).join('') : '<tr><td colspan="8" class="empty">No suitable suggestions for these remaining targets.</td></tr>';
+    $('#suggestions-status').textContent = `Showing ${foods.length} ${suggestionFilter.replace('protein','protein-rich').replace('fibre','fibre-rich')} suggestions based on remaining calorie, protein and fibre targets.`;
+    document.querySelectorAll('[data-suggestion-filter]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.suggestionFilter === suggestionFilter)));
   }
 
   function renderTargets() {
@@ -247,18 +362,19 @@ function initBrowser() {
     $('#history').innerHTML = history.length ? history.map(item => `<li><button type="button" data-history="${item.date}"><span><strong>${formatDate(item.date)}</strong>${item.weight === null ? '' : `<small>${formatNumber(item.weight)} kg</small>`}</span><span>${formatNumber(item.totals.calories)} kcal<br><small>${formatNumber(item.totals.protein)}g P · ${formatNumber(item.totals.fibre)}g F</small></span></button></li>`).join('') : '<li class="empty">Your recent logged days will appear here.</li>';
   }
   function readForm() {
-    const base = { id: editingId || crypto.randomUUID(), name: $('#food-name').value, calories: $('#calories').value, protein: $('#protein').value, fibre: $('#fibre').value };
-    return selectedFood ? { ...base, foodId: selectedFood.id, source: selectedFood.source, unit: selectedFood.unit, quantity: $('#quantity').value } : base;
+    const base = { id: editingId || crypto.randomUUID(), name: $('#food-name').value, calories: $('#calories').value, protein: $('#protein').value, fibre: $('#fibre').value, carbs: $('#carbs').value };
+    if (selectedFood) return { ...base, foodId: selectedFood.id, source: selectedFood.sourceLabel || selectedFood.source, unit: selectedFood.unit, quantity: $('#quantity').value };
+    return editingMetadata ? { ...base, ...editingMetadata } : base;
   }
   function showErrors(errors) {
-    for (const key of ['name', 'calories', 'protein', 'fibre']) {
+    for (const key of ['name', 'calories', 'protein', 'fibre', 'carbs']) {
       const field = key === 'name' ? $('#food-name') : $(`#${key}`);
       field.setAttribute('aria-invalid', errors[key] ? 'true' : 'false');
       $(`#${key}-error`).textContent = errors[key] || '';
     }
   }
   function stopEditing() {
-    editingId = null; selectedFood = null; form.reset(); $('#quantity').value = 1; $('#quantity-unit').textContent = 'serving'; $('#nutrient-preview').textContent = 'Select a catalog food or enter nutrients manually.'; showErrors({}); $('#save-entry').textContent = 'Add entry'; $('#cancel-edit').hidden = true;
+    editingId = null; editingMetadata = null; selectedFood = null; form.reset(); $('#quantity').value = 1; $('#quantity-unit').textContent = 'serving'; $('#nutrient-preview').textContent = 'Select a catalog food or enter nutrients manually.'; showErrors({}); $('#save-entry').textContent = 'Add entry'; $('#cancel-edit').hidden = true;
   }
 
   function chooseFood(food) {
@@ -268,12 +384,12 @@ function initBrowser() {
     if (!selectedFood) return;
     try {
       const item = calculateFood(selectedFood, $('#quantity').value);
-      $('#calories').value = item.calories; $('#protein').value = item.protein; $('#fibre').value = item.fibre;
-      $('#nutrient-preview').textContent = `${formatNumber(item.quantity)} ${item.unit}: ${formatNumber(item.calories)} kcal · ${formatNumber(item.protein)}g protein · ${formatNumber(item.fibre)}g fibre`;
+      $('#calories').value = item.calories; $('#protein').value = item.protein; $('#fibre').value = item.fibre; $('#carbs').value = item.carbs;
+      $('#nutrient-preview').textContent = `${formatNumber(item.quantity)} ${item.unit}: ${formatNumber(item.calories)} kcal · ${formatNumber(item.protein)}g protein · ${formatNumber(item.fibre)}g fibre · ${formatNumber(item.carbs)}g carbs`;
     } catch { $('#nutrient-preview').textContent = 'Enter a quantity greater than zero.'; }
   }
   function renderChoices(target, foods) {
-    target.innerHTML = foods.length ? foods.map((food, index) => `<li><button type="button" data-choice="${index}"><strong>${esc(food.name)}</strong><span>${formatNumber(food.calories)} kcal / ${esc(food.unit)} · ${esc(food.source === 'built-in' ? 'USDA-based estimate' : food.source)}</span></button></li>`).join('') : '<li class="empty">No matches found.</li>';
+    target.innerHTML = foods.length ? foods.map((food, index) => `<li><button type="button" data-choice="${index}"><strong>${esc(food.name)}</strong><span>${formatNumber(food.calories)} kcal / ${esc(food.unit)} · ${esc(food.sourceLabel || food.source || 'Reference data')}</span></button></li>`).join('') : '<li class="empty">No matches found.</li>';
     target.querySelectorAll('[data-choice]').forEach(button => button.addEventListener('click', () => chooseFood(foods[Number(button.dataset.choice)])));
   }
 
@@ -283,6 +399,22 @@ function initBrowser() {
   $('#quantity-plus').addEventListener('click', () => { $('#quantity').value = (Number($('#quantity').value) || 0) + 1; updatePreview(); });
   $('#manual-mode').addEventListener('click', () => { selectedFood = null; $('#food-search').value = ''; $('#food-results').innerHTML = ''; $('#quantity-unit').textContent = 'serving'; $('#nutrient-preview').textContent = 'Manual mode: enter the totals for this entry.'; $('#food-name').focus(); });
   $('#catalog-mode').addEventListener('click', () => $('#food-search').focus());
+  $('#suggestion-filters').addEventListener('click', event => {
+    const button = event.target.closest('[data-suggestion-filter]');
+    if (!button) return;
+    suggestionFilter = button.dataset.suggestionFilter;
+    renderSuggestions(calculateTotals(day().entries));
+  });
+  $('#suggestions-body').addEventListener('click', event => {
+    const button = event.target.closest('[data-suggest]');
+    if (!button) return;
+    const food = FOOD_CATALOG.find(item => item.id === button.dataset.suggest);
+    if (!food) { $('#suggestions-status').textContent = 'That food is no longer available in the catalog.'; return; }
+    chooseFood(food);
+    $('#food-name').focus();
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    announcer.textContent = `${food.name} selected. Review the portion, then add it when ready.`;
+  });
   $('#online-search').addEventListener('input', event => {
     clearTimeout(onlineTimer); onlineController?.abort();
     const query = event.target.value.trim();
@@ -310,6 +442,27 @@ function initBrowser() {
   window.addEventListener('appinstalled', () => { $('#install-app').hidden = true; });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js');
 
+  $('#reminder-toggle').addEventListener('click', async () => {
+    $('#reminder-alert').hidden = true;
+    if (reminderSetting.enabled) {
+      reminderSetting = { enabled: false, nextAt: null };
+      persistReminderSetting(localStorage, reminderSetting);
+      renderReminderStatus();
+      scheduleReminderCheck();
+      return;
+    }
+    reminderSetting = enableReminder();
+    const saved = persistReminderSetting(localStorage, reminderSetting);
+    if (!saved.ok) { reminderSetting = { enabled: false, nextAt: null }; renderReminderStatus(saved.error); return; }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch { /* In-app reminders remain available. */ }
+    }
+    renderReminderStatus();
+    scheduleReminderCheck();
+  });
+  for (const eventName of ['focus', 'pageshow']) window.addEventListener(eventName, checkAndShowReminder);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkAndShowReminder(); });
+
   form.addEventListener('submit', event => {
     event.preventDefault();
     const input = readForm();
@@ -327,12 +480,16 @@ function initBrowser() {
     if (edit) {
       const item = day().entries.find(value => value.id === edit.dataset.edit);
       editingId = item.id;
-      $('#food-name').value = item.name; $('#calories').value = item.calories; $('#protein').value = item.protein; $('#fibre').value = item.fibre;
-      if (item.foodId) {
+      editingMetadata = Object.fromEntries(['foodId', 'source', 'unit', 'quantity'].filter(key => item[key] !== undefined).map(key => [key, item[key]]));
+      $('#food-name').value = item.name; $('#calories').value = item.calories; $('#protein').value = item.protein; $('#fibre').value = item.fibre; $('#carbs').value = item.carbsUnknown ? '' : item.carbs;
+      if (item.foodId && !item.carbsUnknown) {
         const quantity = item.quantity || 1;
-        selectedFood = { id: item.foodId, name: item.name, source: item.source, unit: item.unit, calories: item.calories / quantity, protein: item.protein / quantity, fibre: item.fibre / quantity };
+        selectedFood = { id: item.foodId, name: item.name, sourceLabel: item.source, unit: item.unit, calories: item.calories / quantity, protein: item.protein / quantity, fibre: item.fibre / quantity, carbs: (item.carbs ?? 0) / quantity };
         $('#quantity').value = quantity; $('#quantity-unit').textContent = item.unit; updatePreview();
-      } else selectedFood = null;
+      } else {
+        selectedFood = null;
+        if (item.carbsUnknown) $('#nutrient-preview').textContent = 'Carbs unavailable for legacy entry. Enter carbohydrates to resolve it.';
+      }
       $('#save-entry').textContent = 'Save changes'; $('#cancel-edit').hidden = false; $('#food-name').focus();
     }
     if (remove) {
@@ -384,6 +541,7 @@ function initBrowser() {
   });
   showStorageWarning(loaded.error);
   render();
+  checkAndShowReminder();
 }
 
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', initBrowser);

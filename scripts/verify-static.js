@@ -7,7 +7,8 @@ for (const asset of ['styles.css','app.js','catalog.js','manifest.webmanifest','
   if (!existsSync(resolve(root, asset))) throw new Error(`Missing asset: ${asset}`);
 }
 for (const ref of ['styles.css','app.js','manifest.webmanifest','apple-touch-icon','theme-color']) if (!html.includes(ref)) throw new Error(`index.html missing ${ref}`);
-for (const id of ['log-date','entry-form','entries','history','target-form','weight','export-data','import-data','clear-day','food-search','quantity','quantity-minus','quantity-plus','nutrient-preview','online-search','online-status','install-app','storage-warning','storage-warning-text','download-raw-data','discard-raw-data']) if (!html.includes(`id="${id}"`)) throw new Error(`Missing required element #${id}`);
+for (const id of ['log-date','entry-form','entries','history','target-form','weight','export-data','import-data','clear-day','food-search','quantity','quantity-minus','quantity-plus','nutrient-preview','online-search','online-status','install-app','storage-warning','storage-warning-text','download-raw-data','discard-raw-data','reminder-toggle','reminder-status','reminder-alert']) if (!html.includes(`id="${id}"`)) throw new Error(`Missing required element #${id}`);
+if (!html.includes('not guaranteed while fully closed')) throw new Error('Reminder limitation disclosure is required.');
 const manifest = JSON.parse(readFileSync(resolve(root, 'manifest.webmanifest'), 'utf8'));
 if (manifest.display !== 'standalone' || !String(manifest.start_url).startsWith('./')) throw new Error('Manifest must be standalone and subpath-safe.');
 for (const size of ['192x192','512x512']) if (!manifest.icons?.some(icon => icon.sizes === size && !icon.src.startsWith('/'))) throw new Error(`Manifest missing ${size} relative icon.`);

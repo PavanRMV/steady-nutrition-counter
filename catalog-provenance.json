@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "generated": "2026-09-22",
+  "records": [
+    {
+      "id": "USDA-FDC-SR-LEGACY-2018",
+      "label": "USDA FoodData Central — SR Legacy",
+      "url": "https://fdc.nal.usda.gov/download-datasets/",
+      "license": "US Government public domain",
+      "limitations": "Reference family only: catalog rows are not mapped to exact FDC records or audited portion derivations. Values are representative estimates; cultivar, brand, preparation and moisture change them."
+    },
+    {
+      "id": "IFCT-2017",
+      "label": "Indian Food Composition Tables 2017 (ICMR-NIN)",
+      "url": "https://www.nin.res.in/downloads/IFCT2017.pdf",
+      "license": "ICMR-NIN publication; attribution supplied",
+      "limitations": "Reference family only: catalog rows are not mapped to exact IFCT rows or audited portion derivations. Values are representative estimates; regional variety and cooking method vary."
+    },
+    {
+      "id": "NIN-DIETARY-GUIDELINES-2024-RECIPES",
+      "label": "ICMR-NIN Dietary Guidelines for Indians 2024 — recipe portions",
+      "url": "https://www.nin.res.in/dietaryguidelines/pdfjs/locale/DGI07052024P.pdf",
+      "license": "ICMR-NIN publication; attribution supplied",
+      "limitations": "Prepared-dish rows are generic recipe estimates assembled from referenced ingredient composition and the named serving assumptions; restaurant and home recipes vary substantially."
+    }
+  ],
+  "fieldNotes": {
+    "sourceRef": "Foreign key to a broad reference family in records[].id; it is not record-level evidence",
+    "estimated": "true for every row without exact record-level evidence and an auditable nutrient and portion derivation",
+    "gramsPerUnit": "Representative edible serving mass, not a guaranteed package or household measure"
+  }
+}
