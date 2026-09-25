@@ -24,6 +24,8 @@ export const FOOD_CATALOG = Object.freeze([
   f('catla-cooked-100g','Catla carp','fish','cooked, no added fat','100 g',100,125,19,0,0,'IFCT'),
   f('shrimp-cooked-100g','Shrimp','seafood','cooked','100 g',100,99,24,0,0.2),
   f('goat-roasted-100g','Goat meat','meat','roasted, lean','100 g',100,143,27,0,0),
+  f('banana-raw-medium','Banana','fruit','raw, medium edible portion','medium banana',118,105,1.3,3.1,27),
+  f('date-medjool-one','Medjool date','fruit','dried, pitted edible portion','date',24,66,0.4,1.6,18),
   f('almonds-28g','Almonds','nuts','raw','28 g',28,164,6,3.5,6.1),
   f('walnuts-28g','Walnuts','nuts','raw','28 g',28,185,4.3,1.9,3.9),
   f('cashews-28g','Cashews','nuts','dry roasted, unsalted','28 g',28,163,4.3,0.9,9.2),

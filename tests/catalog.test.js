@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { FOOD_CATALOG, searchCatalog, calculateFood, normalizeOpenFoodFactsProduct, rankSuggestions, suggestionToSelection } from '../catalog.js';
 const provenance = JSON.parse(readFileSync(new URL('../catalog-provenance.json', import.meta.url)));
 
-test('offline catalog has 60-100 unique sourced records and requested coverage', () => {
-  assert.ok(FOOD_CATALOG.length >= 60 && FOOD_CATALOG.length <= 100);
-  assert.equal(new Set(FOOD_CATALOG.map(food => food.id)).size, FOOD_CATALOG.length);
+test('offline catalog has 81 unique sourced records and requested coverage', () => {
+  assert.equal(FOOD_CATALOG.length, 81);
+  assert.equal(new Set(FOOD_CATALOG.map(food => food.id)).size, 81);
   for (const food of FOOD_CATALOG) {
     assert.match(food.id, /^[a-z0-9-]+$/);
     assert.ok(food.name && food.preparation && food.unit && food.gramsPerUnit > 0);
@@ -14,8 +14,29 @@ test('offline catalog has 60-100 unique sourced records and requested coverage',
     for (const key of ['calories', 'protein', 'fibre', 'carbs']) assert.ok(Number.isFinite(food[key]) && food[key] >= 0);
     assert.ok(provenance.records.some(record => record.id === food.sourceRef), food.sourceRef);
   }
-  for (const term of ['walnut','almonds','cashews','pistachios','pecans','hazelnuts','brazil nuts','macadamia','chia','flax','pumpkin seeds','sunflower seeds','sesame','hemp','milk','whey','chicken breast','shrimp','salmon','tilapia','cod','egg','white rice','quinoa','bread','edamame','corn','okra','eggplant','bottle gourd','bitter gourd','cauliflower','cabbage','peas','carrot','potato','green beans','toor dal','moong dal','masoor dal','chana dal','urad dal','roti','idli','dosa','poha','upma','sambar','rajma','chole','curd','paneer','ragi','biryani','goat','pizza']) assert.ok(searchCatalog(term).length, term);
+  for (const term of ['walnut','almonds','cashews','pistachios','pecans','hazelnuts','brazil nuts','macadamia','chia','flax','pumpkin seeds','sunflower seeds','sesame','hemp','milk','whey','chicken breast','shrimp','salmon','tilapia','cod','egg','white rice','quinoa','bread','edamame','corn','okra','eggplant','bottle gourd','bitter gourd','cauliflower','cabbage','peas','carrot','potato','green beans','toor dal','moong dal','masoor dal','chana dal','urad dal','roti','idli','dosa','poha','upma','sambar','rajma','chole','curd','paneer','ragi','biryani','goat','pizza','banana','Medjool date']) assert.ok(searchCatalog(term).length, term);
   assert.equal(searchCatalog('fish').some(food => food.name.toLowerCase() === 'fish'), false);
+});
+
+test('banana and Medjool date use honest USDA-family estimate metadata and scale at quantity two', () => {
+  for (const term of ['banana', 'Medjool date']) {
+    const food = searchCatalog(term)[0];
+    assert.ok(food, term);
+    assert.equal(food.sourceRef, 'USDA-FDC-SR-LEGACY-2018');
+    assert.equal(food.sourceLabel, 'Representative estimate informed by USDA FoodData Central');
+    assert.equal(food.estimated, true);
+    const doubled = calculateFood(food, 2);
+    for (const nutrient of ['calories', 'protein', 'fibre', 'carbs']) {
+      assert.equal(doubled[nutrient], food[nutrient] * 2, `${term} ${nutrient}`);
+    }
+  }
+});
+
+test('banana and Medjool date remain eligible through generic suggestion ranking', () => {
+  const banana = searchCatalog('banana')[0];
+  const date = searchCatalog('Medjool date')[0];
+  assert.equal(rankSuggestions([banana], { calories: 200, protein: 5, fibre: 5 }, 'balanced', 1)[0]?.id, banana?.id);
+  assert.equal(rankSuggestions([date], { calories: 100, protein: 1, fibre: 5 }, 'fibre', 1)[0]?.id, date?.id);
 });
 
 test('every catalog row is estimated unless it has auditable record-level evidence', () => {
